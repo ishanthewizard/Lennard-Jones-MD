@@ -4,11 +4,11 @@ import math
 from tqdm import tqdm
 
 # Initial parameters
-n_particle = 10  # number of particle
+n_particle = 256  # number of particle
 temp = 1.0  # temperature in reduced units
-box = 5.3
-epsilon = 1.0  # LJ epsilon
-sigma = 1.0  # LJ sigma
+box = 10
+epsilon = 1  # LJ epsilon
+sigma = 1  # LJ sigma
 dt = 0.005  # time step for integration
 t_total = 100  # total time
 nsteps = np.rint(t_total / dt).astype(np.int32)
@@ -84,6 +84,11 @@ def force_calc(box, radii, sigma, epsilon):
     # Calculate pair distances
     dr = (radii[:, np.newaxis, :] - radii[np.newaxis, :, :]) * box
 
+    # # minumum image convention
+    dr = dr - box * np.rint(dr / box)
+    # dr = np.where(dr < -0.5, dr - 1, dr) ????? why doesn't this work
+    # dr = np.where(dr > 0.5, dr + 1, dr) ????  why doesn't this work
+
     # Calculate squared distances
     dr_sq = np.sum(dr**2, axis=-1)
 
@@ -98,6 +103,12 @@ def force_calc(box, radii, sigma, epsilon):
     f_mag[mask] = 0.0
 
     forces = np.sum(f_mag[:, :, np.newaxis] * dr, axis=1)
+
+    if np.max(np.abs(0.5 * dt * forces)) > 10:
+        print(glob_step)
+        print(np.max(np.abs(0.5 * dt * f_mag)))
+        print("min radius", np.min(np.abs(dr_sq)))
+        assert 1 == 0
 
     return forces
 
@@ -143,16 +154,21 @@ print("%d" % (0), file=f)
 
 # NVE integration
 # Equilibration
+glob_step = 0
 for step in tqdm(range(nsteps)):
+    glob_step = step
     # Velocity Verlet algorithm
     velocities = velocities + 0.5 * dt * forces
     radii = radii + dt * velocities / box
-    # Applying PBC needed here
+
+    # Applying PBC
+    radii = np.where(np.abs(radii) > 0.5, (radii + 0.5) % 1 - 0.5, radii)
+
     forces = force_calc(box, radii, sigma, epsilon)
     velocities = velocities + 0.5 * dt * forces
 
     # dump frame
-    if step % n_dump == 0:
+    if step % (n_dump // 2) == 0:
         t.append(create_frame(radii, velocities, sigma, box, step / n_dump))
 
 # Things left to do
