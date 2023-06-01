@@ -104,10 +104,9 @@ def force_calc(box, radii, sigma, epsilon):
     dr = dr - box * np.rint(dr / box)
 
     # Calculate squared distances
-    # dr_sq = np.sum(dr**2, axis=-1)
+    dr_sq = np.sum(dr**2, axis=-1)
 
-    # pair_dist.append(np.sqrt(dr_sq))
-    return np.zeros((n_particle, 3)), 0, 0
+    # return np.zeros((n_particle, 3)), 0, 0
 
     # Mask the diagonal to avoid division by zero (self-interaction)
     mask = np.eye(n_particle, dtype=bool)
@@ -161,8 +160,8 @@ t = gsd.hoomd.open(name="test.gsd", mode="w")
 n_dump = 100  # dump for configuration
 
 # Open file to dump log file
-f = open("log.txt", "a+")
-print("step", file=f)
+# f = open("log.txt", "a+")
+# print("step", file=f)
 
 
 def calc_properties():
@@ -172,7 +171,7 @@ def calc_properties():
 
 
 thermo = calc_properties()
-print("%d" % (0), file=f)
+# print("%d" % (0), file=f)
 
 # NVE integration
 # Equilibration
