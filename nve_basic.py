@@ -3,17 +3,21 @@ import gsd.hoomd
 import math
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+from rdfpy import rdf
+
 
 # Initial parameters
 n_particle = 256  # number of particle
-temp = 1.8  # temperature in reduced units
-box = 5.3
+temp = 1  # temperature in reduced units
+box = 15
 epsilon = 1  # LJ epsilon
 sigma = 1  # LJ sigma
 dt = 0.005  # time step for integration
 t_total = 100  # total time
 nsteps = np.rint(t_total / dt).astype(np.int32)
 delta_r = 0.01
+free_gas = False
+times_counted = 0
 
 # I recommend adding a part that reads in parameters from a file to change things as needed
 
@@ -87,26 +91,32 @@ def get_temp():
     return np.sum(velocities**2) / (3 * n_particle - 3)
 
 
-print("TEMPERATURE:", get_temp())
+# print("TEMPERATURE:", get_temp())
 
 
 # You can get energy and the pressure for free out of this calculation if you do it right
 
 
-def force_calc(box, radii, sigma, epsilon):
+def force_calc(box, radii, sigma, epsilon, record_dists):
+    global times_counted
     # Evaluate forces
     # Using LJ potential
     # u_lj(r_ij) = 4*epsilon*[(sigma/r_ij)^12-(sigma/r_ij)^6]s
+
     # Calculate pair distances
     dr = (radii[:, np.newaxis, :] - radii[np.newaxis, :, :]) * box
-    pair_dist.append(np.sqrt(np.sum(dr**2, axis=-1)))
     # # minumum image convention
     dr = dr - box * np.rint(dr / box)
 
     # Calculate squared distances
     dr_sq = np.sum(dr**2, axis=-1)
 
-    # return np.zeros((n_particle, 3)), 0, 0
+    if record_dists:
+        times_counted = times_counted + 1
+        pair_dist.append(np.sqrt(dr_sq))
+
+    if free_gas:
+        return np.zeros((n_particle, 3)), 0, 0
 
     # Mask the diagonal to avoid division by zero (self-interaction)
     mask = np.eye(n_particle, dtype=bool)
@@ -121,17 +131,17 @@ def force_calc(box, radii, sigma, epsilon):
 
     forces = np.sum(f_mag[:, :, np.newaxis] * dr, axis=1)
 
-    # Calculate the potential energy
-    potential_energy = np.sum(4 * epsilon * (inv_dr6**2 - inv_dr6))
-    # We set the diagonal of the potential energy to zero as we do not want to include self-interactions
-    potential_energy -= n_particle * 4 * epsilon * (sigma**12 - sigma**6)
-    # Calculate the kinetic energy
-    kinetic_energy = 0.5 * np.sum(np.linalg.norm(velocities, axis=1) ** 2)
-    total_energy = potential_energy + kinetic_energy
+    # # Calculate the potential energy
+    # potential_energy = np.sum(4 * epsilon * (inv_dr6**2 - inv_dr6))
+    # # We set the diagonal of the potential energy to zero as we do not want to include self-interactions
+    # potential_energy -= n_particle * 4 * epsilon * (sigma**12 - sigma**6)
+    # # Calculate the kinetic energy
+    # kinetic_energy = 0.5 * np.sum(np.linalg.norm(velocities, axis=1) ** 2)
+    # total_energy = potential_energy + kinetic_energy
 
-    internal_virial = -1 / 6 * np.sum(f_mag)
-    pressure = internal_virial + get_temp() * n_particle / box**3
-
+    # internal_virial = -1 / 6 * np.sum(f_mag)
+    # pressure = internal_virial + get_temp() * n_particle / box**3
+    total_energy, pressure = 0, 0
     return (forces, total_energy, pressure)
 
 
@@ -186,8 +196,9 @@ for step in tqdm(range(nsteps)):
 
     # Applying PBC
     radii = np.where(np.abs(radii) > 0.5, (radii + 0.5) % 1 - 0.5, radii)
-
-    forces, total_energy, pressure = force_calc(box, radii, sigma, epsilon)
+    forces, total_energy, pressure = force_calc(
+        box, radii, sigma, epsilon, step % 10 == 0
+    )
     velocities = velocities + 0.5 * dt * forces
 
     # dump frame
@@ -196,46 +207,10 @@ for step in tqdm(range(nsteps)):
 
     # pair distribution function
 
-    if step % 1000 == 0 and step > 10000:
-        distances = np.array(pair_dist).flatten()
-        distances = distances[distances != 0]
-
-        density = n_particle / box**3
-        # Calculate the histogram and divide by the number of samples to get probability density
-        hist, bins = np.histogram(
-            distances, bins=np.arange(0, box / 2, delta_r), density=True
-        )
-
-        # Calculate the bin centers
-        bin_centers = (bins[1:] + bins[:-1]) / 2
-
-        # Calculate the volume of the spherical shells
-        shell_volume = 4 * np.pi / 3 * ((bin_centers + delta_r) ** 3 - bin_centers**3)
-
-        # Calculate the ideal gas density for each bin
-        n_ideal_gas = density * shell_volume
-
-        # Calculate the radial distribution function
-        g_r = hist / n_ideal_gas
-
-        # Plot the radial distribution function
-        plt.plot(bin_centers + 0.5 * delta_r, g_r)
-        plt.xlabel("r")
-        plt.ylabel("g(r)")
-        # Save the figure to a file. Update the filename with each iteration to create a series of images
-        plt.savefig("plot.png")
-
-        # Clear the figure so the next plot doesn't overlap with this one
-        plt.clf()
-        pair_dist = []
-
-    if step % 10 == 0:
-        pair_dist = []
-
-        # end stuff here
+    # end stuff here
 
     if step % (n_dump // 2) == 0:
-        print("TEMP:", get_temp())
+        # print("TEMP:", get_temp())
         t.append(create_frame(radii, velocities, sigma, box, step / n_dump))
 
 # Things left to do
@@ -264,7 +239,44 @@ def plot_quantity(vals, label):
     plt.show()
 
 
-plot_quantity(total_energies, "Total Energy")
-plot_quantity(all_pressures, "Pressure")
+def calc_pair_dist():
+    distances = np.array(pair_dist).flatten()
+    distances = distances[distances != 0]
+    print("TOTAL1", distances.shape)
+    density = n_particle / (box**3)
+    # Calculate the histogram and divide by the number of samples to get probability density
+    hist, bins = np.histogram(
+        distances, bins=np.arange(0, box / 2, delta_r), density=False
+    )
+    print("TOTAL:", np.sum(hist))
+    # Calculate the bin centers
+    bin_centers = (bins[1:] + bins[:-1]) / 2
 
-f.close()
+    hist = hist / (times_counted * n_particle)
+    # Calculate the volume of the spherical shells
+    shell_volume = 4 * np.pi / 3 * ((bin_centers + delta_r) ** 3 - bin_centers**3)
+    # shell_volume = 4 * np.pi * bin_centers**2 * delta_r
+
+    # Calculate the ideal gas density for each bin
+    n_ideal_gas = density * shell_volume
+
+    # Calculate the radial distribution function
+    g_r = hist / n_ideal_gas
+
+    # Plot the radial distribution function
+    plt.plot(bin_centers + 0.5 * delta_r, g_r)
+    plt.xlabel("r")
+    # plt.ylim((0, 4))
+    plt.ylabel("g(r)")
+    # Save the figure to a file. Update the filename with each iteration to create a series of images
+    plt.savefig("plot.png")
+
+    # Clear the figure so the next plot doesn't overlap with this one
+    plt.clf()
+
+
+calc_pair_dist()
+# plot_quantity(total_energies, "Total Energy")
+# plot_quantity(all_pressures, "Pressure")
+
+# f.close()
